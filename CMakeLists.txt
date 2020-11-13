@@ -16,6 +16,10 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package (Threads REQUIRED)
 find_package(SDL2 REQUIRED)
 
+find_library(JetsonGPIO_location NAMES libJetsonGPIO.a)
+add_library(JetsonGPIO STATIC IMPORTED)
+set_target_properties(JetsonGPIO PROPERTIES IMPORTED_LOCATION ${JetsonGPIO_location})
+
 # The following folder will be included
 include_directories("${PROJECT_SOURCE_DIR}/include")
 
@@ -45,4 +49,4 @@ endif()
 
 target_link_libraries(example Threads::Threads)
 target_link_libraries(example ${SDL2_LIBRARIES})
-
+target_link_libraries(example JetsonGPIO)

@@ -9,20 +9,45 @@
 #include <thread>
 #include <SDL2/SDL.h>
 #include <unistd.h>
+#include <JetsonGPIO.h>
+#include <chrono>
 
 using namespace ctre::phoenix;
 using namespace ctre::phoenix::platform;
 using namespace ctre::phoenix::motorcontrol;
 using namespace ctre::phoenix::motorcontrol::can;
+using namespace std::chrono;
 
 /* make some talons for drive train */
 TalonSRX talLeft(1);
-TalonSRX talRght(0);
+TalonSRX talRght(2);
+int jetsonToPir = 100;
+int pirToJetson = 100;
+int jetsonToLightRelay = 100;
+bool parkMode = false;
 
 void initDrive()
 {
 	/* both talons should blink green when driving forward */
 	talRght.SetInverted(true);
+	talLeft.ConfigContinuousCurrentLimit(20, 0);
+	talLeft.ConfigPeakCurrentLimit(25, 0);
+	talLeft.ConfigPeakCurrentDuration(100, 0);
+	talLeft.EnableCurrentLimit(true);
+	talRght.ConfigContinuousCurrentLimit(20, 0);
+	talRght.ConfigPeakCurrentLimit(25, 0);
+	talRght.ConfigPeakCurrentDuration(100, 0);
+	talRght.EnableCurrentLimit(true);
+	talLeft.ConfigOpenloopRamp(2, 0);
+	talRght.ConfigOpenloopRamp(2, 0);
+	talRght.ConfigSelectedFeedbackSensor(FeedbackDevice::CTRE_MagEncoder_Relative, 0, 30);
+	talRght.SetSensorPhase(true);
+	GPIO::setmode(GPIO::BOARD);
+	/* Set up GPIO pins as input or outputs*/
+	GPIO::setup(jetsonToPir, GPIO::OUT);
+	GPIO::setup(pirToJetson, GPIO::IN);
+	GPIO::setup(jetsonToLightRelay, GPIO::OUT, GPIO::LOW);
+	
 }
 
 void drive(double fwd, double turn)
@@ -39,6 +64,15 @@ void sleepApp(int ms)
 	std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }
 
+void lightTimer(int ms){
+	high_resolution_clock::time_point t1 = high_resolution_clock::now();
+	high_resolution_clock::time_point t2 = high_resolution_clock::now();
+	duration<double, std::milli> time_span = t2 - t1;
+	GPIO::output(jetsonToLightRelay, GPIO::HIGH);
+	
+	GPIO::output(jetsonToLightRelay, GPIO::LOW);
+}
+
 int main() {
 	/* don't bother prompting, just use can0 */
 	//std::cout << "Please input the name of your can interface: ";
@@ -48,7 +82,7 @@ int main() {
 	ctre::phoenix::platform::can::SetCANInterface(interface.c_str());
 	
 	// Comment out the call if you would rather use the automatically running diag-server, note this requires uninstalling diagnostics from Tuner. 
-	c_SetPhoenixDiagnosticsStartTime(-1); // disable diag server, instead we will use the diag server stand alone application that Tuner installs
+	//c_SetPhoenixDiagnosticsStartTime(-1); // disable diag server, instead we will use the diag server stand alone application that Tuner installs
 
 	/* setup drive */
 	initDrive();
@@ -101,7 +135,7 @@ int main() {
 		If num axis is 6, then gamepad is in X mode, so neutral drive and wait for D mode.
 		[SAFETY] This means 'X' becomes our robot-disable button.
 		This can be removed if that's not the goal. */
-		if (num_axes >= 6) {
+		if (num_axes >= 7) {
 			/* back to top of while loop */
 			continue;
 		}
@@ -114,19 +148,61 @@ int main() {
 				if (event.type == SDL_QUIT) { break; }
 				if (event.jdevice.type == SDL_JOYDEVICEREMOVED) { break; }
 			}
-
-			/* grab some stick values */
-			double y = ((double)SDL_JoystickGetAxis(joy, 1)) / -32767.0;
-			double turn = ((double)SDL_JoystickGetAxis(joy, 2)) / -32767.0;
+			//If wanda is not parked
+			if (!parkMode){
+				/* grab some stick values */
+			double y = .40 *((double)SDL_JoystickGetAxis(joy, 1))/32767;
+			printf("Y value:%lf\n", y);
+			double turn = .40 * ((double)SDL_JoystickGetAxis(joy, 0))/-32767;
+			printf("turn value:%lf\n", turn);
+			if(y <= .1 && y >= -.1){
+			y=0;
+			}
+			if(turn <= .1 && turn >= -.1){
+			turn =0;			
+			}
 			drive(y, turn);
+			//printf("velocity: %d\n", talRght.GetSelectedSensorVelocity(0));
 
 			/* [SAFETY] only enable drive if top left shoulder button is held down */
 			if (SDL_JoystickGetButton(joy, 4)) {
+				//y = .5;
+				//turn = 0;
 				ctre::phoenix::unmanaged::FeedEnable(100);
+			}
+			//dummy numbers for light controls (15 minutes)
+			if (SDL_JoystickGetButton(joy, 0)) {
+				parkMode = true;
+				lightTimer(900000);
+				parkMode = false;
+			}
+			//dummy numbers for light controls (30 minutes)
+			if (SDL_JoystickGetButton(joy, 1)) {
+				parkMode = true;
+				lightTimer(1800000);
+				parkMode = false;
+			}
+			//dummy numbers for light controls (45 minutes)
+			if (SDL_JoystickGetButton(joy, 2)) {
+				parkMode = true;
+				lightTimer(2700000);
+				parkMode = false;
+			}
+			//dummy numbers for light controls (OFF), still needs interrupt functionality to ignore timer loop.
+			if (SDL_JoystickGetButton(joy, 3)) {
+				parkMode = false;
+				GPIO::output(jetsonToLightRelay, GPIO::LOW);
 			}
 
 			/* loop yield for a bit */
 			sleepApp(20);
+			}
+			//If wanda is parked
+			else{
+				drive(0, 0);
+
+			}
+			
 		}
 
 		/* we've left the loop, likely due to gamepad disconnect */
@@ -134,7 +210,8 @@ int main() {
 		SDL_JoystickClose(joy);
 		printf("gamepad disconnected\n");
 	}
-
+	GPIO::cleanup();
 	SDL_Quit();
 	return 0;
 }
+
